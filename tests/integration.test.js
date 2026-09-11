@@ -77,6 +77,21 @@ test("end-to-end: server triggers a private client and receives streamed file", 
     const received = await readFile(completed.savedPath);
     assert.deepEqual(received, payload);
     assert.equal(completed.sha256, createHash("sha256").update(payload).digest("hex"));
+
+    const lateFailure = await fetch(`${serverUrl}${startBody.status_url}/client-status`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer client-secret-001",
+        "X-Client-Id": "restaurant-001",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status: "failed", error: "late client callback" }),
+    });
+    assert.equal(lateFailure.status, 409);
+    assert.equal((await lateFailure.json()).error, "transfer_terminal");
+
+    const finalStatus = await fetch(`${serverUrl}${startBody.status_url}`, { headers: { "X-API-Key": "admin-secret" } });
+    assert.equal((await finalStatus.json()).status, "completed");
   } finally {
     client.kill("SIGTERM");
     server.kill("SIGTERM");

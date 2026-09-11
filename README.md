@@ -78,6 +78,7 @@ SSE is sufficient here because command flow is primarily server → client. If t
 │   └── generate-file.js   # creates the ~100 MB sample file
 ├── tests
 │   ├── state.test.js
+│   ├── security.test.js
 │   └── integration.test.js
 ├── .env.example
 ├── package.json
@@ -192,7 +193,9 @@ completed
 
 Any unrecoverable error changes the transfer to `failed` with a diagnostic message.
 
-## 8. Senior-level design considerations
+## 8. Design notes
+
+I kept the implementation dependency-free so the reviewer can run it quickly and inspect the full protocol in a small amount of code. The important part of the design is not the specific use of SSE; it is that the private client only needs outbound connectivity, while the server still owns the decision to start a transfer.
 
 ### Bounded memory / streaming
 
@@ -261,8 +264,11 @@ The trigger endpoint returns **202 Accepted**, rather than keeping an HTTP reque
 - wrong client attempts to use a transfer;
 - file exceeds configured maximum;
 - interrupted upload / content-length mismatch;
+- expected-size mismatch between client acknowledgement and received bytes;
 - partial-file cleanup;
 - client-reported failure;
+- terminal transfer states cannot be overwritten by late client callbacks;
+- missing/invalid admin or client credentials;
 - control connection disconnect/reconnect.
 
 ## 10. Production evolution
@@ -310,6 +316,8 @@ The test suite includes:
 
 - state/security unit tests;
 - an **end-to-end integration test** that starts a real server and client process, triggers a download, streams a 2 MiB test file, verifies the received bytes, and verifies SHA-256.
+- security and failure-path tests for unauthorized admin access, disconnected clients, missing local files, and attempts to download incomplete transfers.
+- protocol validation tests for invalid JSON/body shapes, invalid acknowledged file sizes, and late callbacks after terminal transfer states.
 
 ## 13. Assumptions
 

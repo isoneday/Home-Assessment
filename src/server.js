@@ -62,6 +62,28 @@ async function readJson(req, maxBytes = 64 * 1024) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+function isTerminalStatus(status) {
+  return status === "completed" || status === "failed";
+}
+
+function validByteCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+async function readJsonOrFail(req, res) {
+  try {
+    return await readJson(req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "request body too large") {
+      sendJson(res, 413, { error: "request_body_too_large" });
+    } else {
+      sendJson(res, 400, { error: "invalid_json" });
+    }
+    return undefined;
+  }
+}
+
 function writeSse(res, event, data) {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -116,8 +138,21 @@ async function receiveFile(req, res, transfer) {
     sendJson(res, 409, { error: "transfer_already_completed" });
     return;
   }
+  if (transfer.status === "receiving") {
+    sendJson(res, 409, { error: "transfer_already_receiving" });
+    return;
+  }
+  if (transfer.status === "failed") {
+    sendJson(res, 409, { error: "transfer_already_failed" });
+    return;
+  }
 
-  const declaredLength = Number(req.headers["content-length"] ?? 0);
+  const declaredLengthHeader = req.headers["content-length"];
+  const declaredLength = declaredLengthHeader === undefined ? 0 : Number(declaredLengthHeader);
+  if (!validByteCount(declaredLength)) {
+    sendJson(res, 400, { error: "invalid_content_length" });
+    return;
+  }
   if (declaredLength > MAX_FILE_BYTES) {
     state.updateTransfer(transfer.id, { status: "failed", error: "file exceeds configured size limit" });
     sendJson(res, 413, { error: "file_too_large" });
@@ -151,6 +186,9 @@ async function receiveFile(req, res, transfer) {
     await pipeline(req, createWriteStream(tempPath, { flags: "wx" }));
     if (declaredLength > 0 && declaredLength !== receivedBytes) {
       throw new Error(`content-length mismatch: declared=${declaredLength}, received=${receivedBytes}`);
+    }
+    if (validByteCount(transfer.expectedBytes) && transfer.expectedBytes !== receivedBytes) {
+      throw new Error(`expected-size mismatch: expected=${transfer.expectedBytes}, received=${receivedBytes}`);
     }
 
     const digest = hash.digest("hex");
@@ -247,8 +285,18 @@ const server = createServer(async (req, res) => {
       if (clientId !== transfer.clientId || !clientAuthorized(req, clientId)) {
         return sendJson(res, 401, { error: "unauthorized_client" });
       }
-      const body = await readJson(req);
+      const body = await readJsonOrFail(req, res);
+      if (body === undefined) return;
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return sendJson(res, 400, { error: "invalid_status" });
+      }
+      if (isTerminalStatus(transfer.status)) {
+        return sendJson(res, 409, { error: "transfer_terminal", status: transfer.status });
+      }
       if (body.status === "client_acknowledged") {
+        if (!validByteCount(body.file_size) || body.file_size > MAX_FILE_BYTES) {
+          return sendJson(res, 400, { error: "invalid_file_size" });
+        }
         state.updateTransfer(transfer.id, {
           status: "client_acknowledged",
           fileName: body.file_name,
