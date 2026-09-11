@@ -1,0 +1,17 @@
+{
+  "name": "silentmode-home-assignment",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Server-triggered reverse-pull file transfer for private on-premise clients",
+  "scripts": {
+    "server": "node src/server.js",
+    "client": "node src/client.js",
+    "trigger": "node src/trigger.js",
+    "generate:file": "node src/generate-file.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
